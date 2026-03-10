@@ -206,38 +206,31 @@
     }
   
     async function loadMarket() {
-      console.log("Loading market...");
-  
-      const marketResp = await supabaseClient
-        .from("market_state")
-        .select("yes_votes,no_votes")
-        .eq("id", 1)
-        .single();
-  
-      console.log("market_state response:", marketResp);
-  
-      const historyResp = await supabaseClient
-        .from("market_history")
-        .select("yes_price,created_at")
-        .order("id", { ascending: true })
-        .limit(300);
-  
-      console.log("market_history response:", historyResp);
-  
-      if (marketResp.error) throw marketResp.error;
-      if (historyResp.error) throw historyResp.error;
-  
-      const market = marketResp.data;
-      const history = historyResp.data;
-  
-      const yesVotes = market.yes_votes || 0;
-      const noVotes = market.no_votes || 0;
-      const total = yesVotes + noVotes;
-      const yesPrice = total === 0 ? 0.5 : yesVotes / total;
-  
+      const [{ data: market, error: marketError }, { data: history, error: historyError }] = await Promise.all([
+        supabaseClient
+          .from("market_state")
+          .select("q_yes,q_no,b")
+          .eq("id", 1)
+          .maybeSingle(),
+        supabaseClient
+          .from("market_history")
+          .select("yes_price,created_at")
+          .order("id", { ascending: true })
+          .limit(300)
+      ]);
+    
+      if (marketError) throw marketError;
+      if (historyError) throw historyError;
+    
+      const qYes = market?.q_yes || 0;
+      const qNo = market?.q_no || 0;
+      const b = market?.b || 10;
+    
+      const yesPrice = 1 / (1 + Math.exp(-(qYes - qNo) / b));
+    
       fill.style.width = `${Math.round(yesPrice * 100)}%`;
       odds.textContent = `YES ${Math.round(yesPrice * 100)}% | NO ${100 - Math.round(yesPrice * 100)}%`;
-  
+    
       marketHistory = history || [];
       drawChart(marketHistory);
       votesLeftEl.textContent = lastVotesLeft;
@@ -247,24 +240,22 @@
       yesBtn.disabled = true;
       noBtn.disabled = true;
       setStatus("Submitting vote...");
-  
+    
       try {
-        console.log("Calling cast_vote with:", direction);
-  
         const { data, error } = await supabaseClient.rpc("cast_vote", { p_direction: direction });
-  
-        console.log("cast_vote response:", { data, error });
-  
+    
         if (error) throw error;
-  
+    
         lastVotesLeft = data.votes_left_today;
         votesLeftEl.textContent = lastVotesLeft;
+    
+        fill.style.width = `${Math.round(data.yes_price * 100)}%`;
+        odds.textContent = `YES ${Math.round(data.yes_price * 100)}% | NO ${100 - Math.round(data.yes_price * 100)}%`;
+    
         setStatus("Vote accepted");
-  
         await loadMarket();
       } catch (err) {
-        console.error("Vote failed:", err);
-        setStatus("Vote failed: " + (err.message || JSON.stringify(err)));
+        setStatus(err.message || "Vote failed");
       } finally {
         yesBtn.disabled = false;
         noBtn.disabled = false;
