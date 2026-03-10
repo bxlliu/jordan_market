@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Jordan Trip Market</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f1115;
+      color: #fff;
+      margin: 0;
+      padding: 32px 20px;
+      text-align: center;
+    }
+    h1 { margin-bottom: 8px; }
+    .sub { color: #b7bcc7; margin-bottom: 20px; }
+    .bar {
+      width: 520px;
+      max-width: 95%;
+      height: 32px;
+      margin: 18px auto;
+      background: #222834;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid #343b49;
+    }
+    .fill {
+      height: 100%;
+      width: 50%;
+      background: #2ecc71;
+      transition: width 0.2s ease;
+    }
+    .odds {
+      font-size: 28px;
+      margin: 10px 0 20px;
+    }
+    .actions button {
+      font-size: 18px;
+      padding: 14px 24px;
+      border: none;
+      border-radius: 12px;
+      color: white;
+      margin: 0 8px;
+      cursor: pointer;
+    }
+    .yes { background: #2ecc71; }
+    .no { background: #e74c3c; }
+    .meta {
+      margin-top: 16px;
+      color: #d7dbe3;
+      min-height: 24px;
+    }
+    .status {
+      color: #9fb0c8;
+      margin-top: 6px;
+      min-height: 20px;
+    }
+    .card {
+      width: 860px;
+      max-width: 96%;
+      margin: 28px auto 0;
+      background: #171b22;
+      border: 1px solid #2f3744;
+      border-radius: 14px;
+      padding: 14px;
+      box-sizing: border-box;
+    }
+    .card-title {
+      text-align: left;
+      color: #dfe4ec;
+      margin-bottom: 10px;
+    }
+    canvas {
+      width: 100%;
+      height: 320px;
+      display: block;
+      background: #10141b;
+      border-radius: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Will Ben Go To Jordan?</h1>
+  <div class="sub">Shared office market</div>
+
+  <div class="bar"><div id="fill" class="fill"></div></div>
+  <div id="odds" class="odds">YES 50% | NO 50%</div>
+
+  <div class="actions">
+    <button class="yes" id="yesBtn">Vote YES</button>
+    <button class="no" id="noBtn">Vote NO</button>
+  </div>
+
+  <div class="meta">Votes left today: <span id="votesLeft">10</span></div>
+  <div class="status" id="status"></div>
+
+  <div class="card">
+    <div class="card-title">YES price history</div>
+    <canvas id="chart" width="820" height="320"></canvas>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const SUPABASE_URL = "PASTE_YOUR_SUPABASE_URL";
+    const SUPABASE_KEY = "PASTE_YOUR_PUBLISHABLE_OR_ANON_KEY";
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    const fill = document.getElementById("fill");
+    const odds = document.getElementById("odds");
+    const votesLeftEl = document.getElementById("votesLeft");
+    const statusEl = document.getElementById("status");
+    const yesBtn = document.getElementById("yesBtn");
+    const noBtn = document.getElementById("noBtn");
+    const canvas = document.getElementById("chart");
+    const ctx = canvas.getContext("2d");
+
+    let marketHistory = [];
+    let lastVotesLeft = 10;
+
+    async function ensureSession() {
+      const { data: sessionData } = await supabaseClient.auth.getSession();
+      if (sessionData.session) return;
+
+      const { error } = await supabaseClient.auth.signInAnonymously();
+      if (error) {
+        throw error;
+      }
+    }
+
+    function setStatus(msg) {
+      statusEl.textContent = msg || "";
+    }
+
+    function drawChart(points) {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const padL = 56, padR = 18, padT = 20, padB = 36;
+      const chartW = w - padL - padR;
+      const chartH = h - padT - padB;
+
+      function yOf(prob) {
+        return padT + (1 - prob) * chartH;
+      }
+
+      ctx.strokeStyle = "#2c3440";
+      ctx.fillStyle = "#8b95a7";
+      ctx.lineWidth = 1;
+      ctx.font = "12px Arial";
+
+      for (let i = 0; i <= 4; i++) {
+        const pct = 100 - i * 25;
+        const y = padT + chartH * i / 4;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(w - padR, y);
+        ctx.stroke();
+        ctx.fillText(pct + "%", 10, y + 4);
+      }
+
+      if (!points.length) {
+        ctx.fillText("No price history yet", padL + 20, padT + chartH / 2);
+        return;
+      }
+
+      const spacing = points.length === 1 ? chartW : chartW / (points.length - 1);
+      const plotted = points.map((p, i) => ({
+        x: points.length === 1 ? padL + chartW / 2 : padL + i * spacing,
+        y: yOf(p.yes_price),
+        t: p.created_at
+      }));
+
+      ctx.strokeStyle = "#2ecc71";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(plotted[0].x, plotted[0].y);
+      for (let i = 1; i < plotted.length; i++) {
+        ctx.lineTo(plotted[i].x, plotted[i].y);
+      }
+      ctx.stroke();
+
+      for (const p of plotted) {
+        ctx.beginPath();
+        ctx.fillStyle = "#2ecc71";
+        ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    async function loadMarket() {
+      const [{ data: market, error: marketError }, { data: history, error: historyError }] = await Promise.all([
+        supabaseClient.from("market_state").select("yes_votes,no_votes").eq("id", 1).single(),
+        supabaseClient.from("market_history").select("yes_price,created_at").order("id", { ascending: true }).limit(300)
+      ]);
+
+      if (marketError) throw marketError;
+      if (historyError) throw historyError;
+
+      const yesVotes = market.yes_votes || 0;
+      const noVotes = market.no_votes || 0;
+      const total = yesVotes + noVotes;
+      const yesPrice = total === 0 ? 0.5 : yesVotes / total;
+
+      fill.style.width = `${Math.round(yesPrice * 100)}%`;
+      odds.textContent = `YES ${Math.round(yesPrice * 100)}% | NO ${100 - Math.round(yesPrice * 100)}%`;
+
+      marketHistory = history || [];
+      drawChart(marketHistory);
+      votesLeftEl.textContent = lastVotesLeft;
+    }
+
+    async function vote(direction) {
+      yesBtn.disabled = true;
+      noBtn.disabled = true;
+      setStatus("Submitting vote...");
+
+      try {
+        const { data, error } = await supabaseClient.rpc("cast_vote", { p_direction: direction });
+
+        if (error) throw error;
+
+        lastVotesLeft = data.votes_left_today;
+        votesLeftEl.textContent = lastVotesLeft;
+        setStatus("Vote accepted");
+
+        await loadMarket();
+      } catch (err) {
+        setStatus(err.message || "Vote failed");
+      } finally {
+        yesBtn.disabled = false;
+        noBtn.disabled = false;
+      }
+    }
+
+    yesBtn.addEventListener("click", () => vote("yes"));
+    noBtn.addEventListener("click", () => vote("no"));
+
+    async function init() {
+      try {
+        await ensureSession();
+        await loadMarket();
+        setInterval(loadMarket, 2000);
+      } catch (err) {
+        setStatus(err.message || "Startup failed");
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
