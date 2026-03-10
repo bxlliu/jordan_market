@@ -476,9 +476,19 @@
       try {
         setStatus("Starting up...");
         await ensureSession();
-        await loadMarket();
+    
+        await loadMarket();        // first load immediately
+    
+        setInterval(async () => {  // then poll every 2s
+          try {
+            await loadMarket();
+          } catch (e) {
+            console.error("refresh failed", e);
+          }
+        }, 2000);
+    
         setStatus("Ready");
-        setInterval(loadMarket, 2000);
+    
       } catch (err) {
         console.error("Startup failed:", err);
         setStatus("Startup failed: " + (err.message || JSON.stringify(err)));
