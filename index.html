@@ -81,6 +81,57 @@
       background: #10141b;
       border-radius: 10px;
     }
+    .fill {
+      height: 100%;
+      width: 50%;
+      transition: width 0.45s ease, background 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease;
+    }
+    
+    .fill.flash-up {
+      box-shadow: 0 0 18px rgba(46, 204, 113, 0.9);
+      transform: scaleY(1.08);
+    }
+    
+    .fill.flash-down {
+      box-shadow: 0 0 18px rgba(231, 76, 60, 0.9);
+      transform: scaleY(1.08);
+    }
+    
+    .actions button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    .card {
+      width: 860px;
+      max-width: 96%;
+      margin: 28px auto 0;
+      background: #171b22;
+      border: 1px solid #2f3744;
+      border-radius: 14px;
+      padding: 14px;
+      box-sizing: border-box;
+    }
+    
+    .canvas-wrap {
+      position: relative;
+    }
+    
+    .tooltip {
+      position: absolute;
+      pointer-events: none;
+      display: none;
+      background: rgba(15, 17, 21, 0.97);
+      color: white;
+      border: 1px solid #3a4352;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      text-align: left;
+      white-space: nowrap;
+      z-index: 20;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    }
   </style>
 </head>
 <body>
@@ -100,7 +151,10 @@
 
   <div class="card">
     <div class="card-title">YES price history</div>
-    <canvas id="chart" width="820" height="320"></canvas>
+    <div class="canvas-wrap">
+      <canvas id="chart" width="820" height="320"></canvas>
+      <div id="chartTooltip" class="tooltip"></div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -117,9 +171,13 @@
     const noBtn = document.getElementById("noBtn");
     const canvas = document.getElementById("chart");
     const ctx = canvas.getContext("2d");
-  
+
+    const tooltipEl = document.getElementById("chartTooltip");
+    
     let marketHistory = [];
     let lastVotesLeft = 10;
+    let chartPoints = [];
+    let previousYesPrice = null;
   
     function setStatus(msg) {
       statusEl.textContent = msg || "";
@@ -155,20 +213,21 @@
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
-  
+      chartPoints = [];
+    
       const padL = 56, padR = 18, padT = 20, padB = 36;
       const chartW = w - padL - padR;
       const chartH = h - padT - padB;
-  
+    
       function yOf(prob) {
         return padT + (1 - prob) * chartH;
       }
-  
+    
       ctx.strokeStyle = "#2c3440";
       ctx.fillStyle = "#8b95a7";
       ctx.lineWidth = 1;
       ctx.font = "12px Arial";
-  
+    
       for (let i = 0; i <= 4; i++) {
         const pct = 100 - i * 25;
         const y = padT + chartH * i / 4;
@@ -178,19 +237,34 @@
         ctx.stroke();
         ctx.fillText(pct + "%", 10, y + 4);
       }
-  
+    
       if (!points.length) {
         ctx.fillText("No price history yet", padL + 20, padT + chartH / 2);
         return;
       }
-  
-      const spacing = points.length === 1 ? chartW : chartW / (points.length - 1);
-      const plotted = points.map((p, i) => ({
-        x: points.length === 1 ? padL + chartW / 2 : padL + i * spacing,
+    
+      const cleanPoints = points.filter(p =>
+        p &&
+        typeof p.yes_price === "number" &&
+        Number.isFinite(p.yes_price)
+      );
+    
+      if (!cleanPoints.length) {
+        ctx.fillText("No valid price history", padL + 20, padT + chartH / 2);
+        return;
+      }
+    
+      const spacing = cleanPoints.length === 1 ? chartW : chartW / (cleanPoints.length - 1);
+    
+      const plotted = cleanPoints.map((p, i) => ({
+        x: cleanPoints.length === 1 ? padL + chartW / 2 : padL + i * spacing,
         y: yOf(p.yes_price),
-        t: p.created_at
+        yes_price: p.yes_price,
+        created_at: p.created_at || ""
       }));
-  
+    
+      chartPoints = plotted;
+    
       ctx.strokeStyle = "#2ecc71";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -199,15 +273,120 @@
         ctx.lineTo(plotted[i].x, plotted[i].y);
       }
       ctx.stroke();
-  
+    
       for (const p of plotted) {
         ctx.beginPath();
         ctx.fillStyle = "#2ecc71";
-        ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
         ctx.fill();
+    
+        ctx.beginPath();
+        ctx.strokeStyle = "#10141b";
+        ctx.lineWidth = 1.5;
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    
+      const labelCount = Math.min(6, plotted.length);
+      ctx.fillStyle = "#8b95a7";
+      ctx.font = "11px Arial";
+    
+      for (let i = 0; i < labelCount; i++) {
+        const idx = Math.round(i * (plotted.length - 1) / Math.max(1, labelCount - 1));
+        const p = plotted[idx];
+        const label = p.created_at ? new Date(p.created_at).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        }) : "";
+        ctx.fillText(label, p.x - 24, h - 10);
       }
     }
-  
+
+    function setupChartTooltip() {
+      canvas.addEventListener("mousemove", (event) => {
+        if (!chartPoints.length) {
+          tooltipEl.style.display = "none";
+          return;
+        }
+    
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+    
+        const mouseX = (event.clientX - rect.left) * scaleX;
+        const mouseY = (event.clientY - rect.top) * scaleY;
+    
+        let nearest = null;
+        let nearestDist = Infinity;
+    
+        for (const p of chartPoints) {
+          const dx = p.x - mouseX;
+          const dy = p.y - mouseY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+    
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearest = p;
+          }
+        }
+    
+        if (!nearest || nearestDist > 12) {
+          tooltipEl.style.display = "none";
+          return;
+        }
+    
+        const timeLabel = nearest.created_at
+          ? new Date(nearest.created_at).toLocaleString()
+          : "";
+    
+        tooltipEl.innerHTML =
+          `<div><strong>Time:</strong> ${timeLabel}</div>` +
+          `<div><strong>YES:</strong> ${(nearest.yes_price * 100).toFixed(1)}%</div>` +
+          `<div><strong>NO:</strong> ${(100 - nearest.yes_price * 100).toFixed(1)}%</div>`;
+    
+        tooltipEl.style.display = "block";
+        tooltipEl.style.left = `${event.clientX - rect.left + 14}px`;
+        tooltipEl.style.top = `${event.clientY - rect.top - 10}px`;
+      });
+    
+      canvas.addEventListener("mouseleave", () => {
+        tooltipEl.style.display = "none";
+      });
+    }
+    
+    function setBarAppearance(yesPrice) {
+      const pct = Math.round(yesPrice * 100);
+      fill.style.width = `${pct}%`;
+    
+      if (pct > 50) {
+        fill.style.background = "#2ecc71";
+      } else if (pct < 50) {
+        fill.style.background = "#e74c3c";
+      } else {
+        fill.style.background = "#6c7a89";
+      }
+    }
+    
+    function flashPriceChange(newYesPrice) {
+      if (previousYesPrice === null) {
+        previousYesPrice = newYesPrice;
+        return;
+      }
+    
+      fill.classList.remove("flash-up", "flash-down");
+    
+      if (newYesPrice > previousYesPrice) {
+        fill.classList.add("flash-up");
+        setTimeout(() => fill.classList.remove("flash-up"), 350);
+      } else if (newYesPrice < previousYesPrice) {
+        fill.classList.add("flash-down");
+        setTimeout(() => fill.classList.remove("flash-down"), 350);
+      }
+    
+      previousYesPrice = newYesPrice;
+    }
+    
     async function loadMarket() {
       const { data: userData, error: userError } = await supabaseClient.auth.getUser();
       if (userError) throw userError;
@@ -248,26 +427,16 @@
       const qYes = market?.q_yes || 0;
       const qNo = market?.q_no || 0;
       const b = (market?.b && market.b > 0) ? market.b : 10;
-    
-      const yesPrice = 1 / (1 + Math.exp(-(qYes - qNo) / b));
-    
-      const pct = Math.round(yesPrice * 100);
-
-      fill.style.width = `${pct}%`;
       
-      if (pct > 50) {
-        fill.style.background = "#2ecc71"; // green
-      } else if (pct < 50) {
-        fill.style.background = "#e74c3c"; // red
-      } else {
-        fill.style.background = "#6c7a89"; // neutral
-      }
+      const yesPrice = 1 / (1 + Math.exp(-(qYes - qNo) / b));
+      
+      setBarAppearance(yesPrice);
+      flashPriceChange(yesPrice);
+      
       odds.textContent = `YES ${Math.round(yesPrice * 100)}% | NO ${100 - Math.round(yesPrice * 100)}%`;
-    
+      
       marketHistory = history || [];
       drawChart(marketHistory);
-    
-      lastVotesLeft = Math.max(0, 10 - (votesToday || 0));
       votesLeftEl.textContent = lastVotesLeft;
     }
   
@@ -286,15 +455,8 @@
     
         const pct = Math.round(data.yes_price * 100);
 
-        fill.style.width = `${pct}%`;
-        
-        if (pct > 50) {
-          fill.style.background = "#2ecc71";
-        } else if (pct < 50) {
-          fill.style.background = "#e74c3c";
-        } else {
-          fill.style.background = "#6c7a89";
-        }
+        setBarAppearance(data.yes_price);
+        flashPriceChange(data.yes_price);
         odds.textContent = `YES ${Math.round(data.yes_price * 100)}% | NO ${100 - Math.round(data.yes_price * 100)}%`;
     
         setStatus("Vote accepted");
@@ -322,7 +484,7 @@
         setStatus("Startup failed: " + (err.message || JSON.stringify(err)));
       }
     }
-  
+    setupChartTooltip();
     init();
   </script>
 </body>
